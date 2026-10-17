@@ -53,16 +53,6 @@ F_SMALL = _font(FONT_BOLD, 11)
 F_BADGE = _font(FONT_BOLD, 10)
 
 
-def temp_color(t: float) -> tuple[int, int, int]:
-    """Bleu (froid) -> gris -> rouge (chaud) sur la plage de la barre."""
-    x = min(1.0, max(0.0, (t - BAR_MIN) / (BAR_MAX - BAR_MIN)))
-    if x < 0.5:
-        k = x / 0.5
-        return tuple(int(a + (b - a) * k) for a, b in zip(BLUE, (170, 170, 170)))
-    k = (x - 0.5) / 0.5
-    return tuple(int(a + (b - a) * k) for a, b in zip((170, 170, 170), RED))
-
-
 # --------------------------------------------------------------- barre animée
 # Barre de température d'une seule couleur, qui « respire » d'une teinte à
 # l'autre : bleu <-> violet à froid, rouge <-> orange à chaud ; entre les deux,
@@ -86,6 +76,31 @@ _C_RED = np.array((255, 30, 25), np.float32)
 _C_ORANGE = np.array((255, 150, 20), np.float32)
 
 
+LIGHT_BREATH_S = 6.0  # respiration plus lente des ventilateurs et de la carte mère
+
+
+def palette(heat: float, t: float, period: float) -> np.ndarray:
+    """Couleur (float RGB) qui respire entre deux teintes, selon la température.
+
+    heat : 0 (froid) .. 1 (chaud). Froid : bleu <-> violet ; chaud : rouge <->
+    orange ; entre les deux, la paire de teintes glisse progressivement.
+    """
+    b = 0.5 - 0.5 * math.cos(2 * math.pi * t / period)
+    b = b * b * (3 - 2 * b)
+    h = heat * heat * (3 - 2 * heat)
+    first = _C_BLUE * (1 - h) + _C_RED * h
+    second = _C_VIOLET * (1 - h) + _C_ORANGE * h
+    c = first * (1 - b) + second * b
+    return c * (255.0 / max(1.0, float(c.max())))   # garde des teintes vives au milieu
+
+
+def light_color(heat: float, t: float) -> tuple[int, int, int]:
+    """Couleur des LED : même palette, respiration lente, éclat qui pulse aussi."""
+    b = 0.5 - 0.5 * math.cos(2 * math.pi * t / LIGHT_BREATH_S)
+    c = palette(heat, t, LIGHT_BREATH_S) * (0.45 + 0.55 * b)
+    return tuple(int(x) for x in c)
+
+
 class Anim:
     """État des animations (temps, température lissée)."""
 
@@ -98,13 +113,7 @@ class Anim:
         self.heat = f if self.heat is None else self.heat + (f - self.heat) * 0.05
 
     def color(self) -> np.ndarray:
-        b = 0.5 - 0.5 * math.cos(2 * math.pi * (time.monotonic() - self._t0) / BAR_BREATH_S)
-        b = b * b * (3 - 2 * b)
-        h = self.heat * self.heat * (3 - 2 * self.heat)
-        first = _C_BLUE * (1 - h) + _C_RED * h
-        second = _C_VIOLET * (1 - h) + _C_ORANGE * h
-        c = first * (1 - b) + second * b
-        return c * (255.0 / max(1.0, float(c.max())))   # garde des teintes vives au milieu
+        return palette(self.heat, time.monotonic() - self._t0, BAR_BREATH_S)
 
     def paint(self, a: np.ndarray) -> None:
         """Dessine la barre (et son halo) dans le tableau RGB float `a`."""

@@ -1,9 +1,9 @@
 """Démon kraken-lxc : écran LCD + couleurs selon l'état de l'hôte Proxmox.
 
 - Écran : tableau de bord animé (~15 img/s), relevés rafraîchis toutes les 2 s.
-- Ventilateur 1 + carte mère : état des LXC (vert OK, orange LXC attendu arrêté).
-- Ventilateur 2 : température CPU (bleu froid -> rouge chaud).
-Les couleurs ne sont réécrites qu'en cas de changement, et au démarrage.
+  L'état des LXC est porté par l'icône du robot.
+- Ventilateurs + carte mère : même palette que la barre de température
+  (bleu/violet froid -> rouge/orange chaud), en respiration lente (6 s).
 
 Usage : python -m kraken_lxc.daemon [--fps 15] [--temp-override 30]
 """
@@ -20,6 +20,7 @@ from . import lcd, metrics, notify, render
 from .hue2 import Hue2, find_kraken
 
 log = logging.getLogger("kraken-lxc")
+_board: "BoardLight | None" = None
 
 
 def _fusion():
@@ -29,12 +30,29 @@ def _fusion():
     return None
 
 
-def _set_board(color: tuple[int, int, int]) -> None:
-    dev = _fusion()
-    if dev is None:
-        return
-    with dev.connect():
-        dev.set_color("sync", "fixed", [color])
+class BoardLight(threading.Thread):
+    """Carte mère (RGB Fusion, autre périphérique) : ~6 écritures/s, ~33 ms chacune."""
+
+    def __init__(self, anim: render.Anim):
+        super().__init__(daemon=True)
+        self.anim = anim
+
+    def run(self) -> None:
+        while True:
+            dev = _fusion()
+            if dev is None:
+                return
+            try:
+                with dev.connect():
+                    while True:
+                        t0 = time.monotonic()
+                        if self.anim.heat is not None:
+                            c = render.light_color(self.anim.heat, t0 - self.anim._t0)
+                            dev.set_color("sync", "fixed", [c])
+                        time.sleep(max(0.0, 0.16 - (time.monotonic() - t0)))
+            except Exception:
+                log.exception("RGB carte mère, nouvelle tentative dans 5 s")
+                time.sleep(5)
 
 
 class Poller(threading.Thread):
@@ -46,8 +64,6 @@ class Poller(threading.Thread):
         self.temp_override = temp_override
         self.load = metrics.CpuLoad()
         self.view: render.View | None = None
-        self.colors: tuple | None = None   # (état LXC, température) souhaités
-        self._board = None
         self.poll()
 
     def poll(self) -> None:
@@ -59,16 +75,6 @@ class Poller(threading.Thread):
             lxc_running=lxc.running, lxc_expected=lxc.expected, lxc_ok=lxc.ok,
             notifications=notify.count(),
         )
-        state_col = render.GREEN if lxc.ok else render.ORANGE
-        # par paliers de 5 °C pour ne pas réécrire à chaque variation
-        temp_col = render.temp_color(round((temp if temp is not None else 50) / 5) * 5)
-        self.colors = (state_col, temp_col)
-        if state_col != self._board:  # carte mère : autre périphérique, réglé ici
-            try:
-                _set_board(state_col)
-                self._board = state_col
-            except Exception:  # la carte mère est optionnelle
-                log.exception("RGB carte mère")
 
     def run(self) -> None:
         while True:
@@ -83,21 +89,27 @@ def run(fps: float, temp_override: float | None) -> None:
     poller = Poller(temp_override)
     poller.start()
     anim = render.Anim()
+    anim.step(poller.view.cpu_temp)
+    global _board
+    if _board is None or not _board.is_alive():  # un seul thread, même après une reprise
+        _board = BoardLight(anim)
+        _board.start()
+    _board.anim = anim
     dev = find_kraken()
     with dev.connect():
         dev.initialize()
         hue = Hue2(dev)
-        last_colors = None
         period = 1.0 / fps
+        frame = 0
         while True:
             t0 = time.monotonic()
-            view, colors = poller.view, poller.colors
-            if colors != last_colors:  # même périphérique USB que l'écran : ici
-                hue.set_fans(list(colors))
-                last_colors = colors
-                log.info("couleurs ventilateurs : LXC %s, temp %s", *colors)
+            view = poller.view
             anim.step(view.cpu_temp)
+            if frame % 2 == 0:  # ventilateurs : même périphérique USB que l'écran
+                c = render.light_color(anim.heat, t0 - anim._t0)
+                hue.set_fans([c, c])
             lcd.send_frame(dev, render.to_rgb565(render.render(view, anim)))
+            frame += 1
             time.sleep(max(0.0, period - (time.monotonic() - t0)))
 
 
@@ -105,7 +117,7 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--fps", type=float, default=15.0)
     p.add_argument("--temp-override", type=float, default=None,
-                   help="force la température affichée (test des effets neige/feu)")
+                   help="force la température (test des couleurs)")
     a = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     while True:
