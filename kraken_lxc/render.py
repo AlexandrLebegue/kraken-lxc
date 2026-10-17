@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import random
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -65,18 +66,38 @@ def temp_color(t: float) -> tuple[int, int, int]:
 
 
 # --------------------------------------------------------------- particules
+BREATH_PERIOD_S = 4.0
+
+# Halo sur le bord de l'écran rond : 0 au centre, 1 sur le bord.
+_yy, _xx = np.mgrid[0:SIZE, 0:SIZE]
+_R = np.hypot(_xx - CENTER + 0.5, _yy - CENTER + 0.5)
+_RING = np.clip((_R - 70) / 50, 0, 1) ** 1.6
+_GLOW_SNOW = _RING * (1.0 - 0.6 * _yy / SIZE)   # plus présent en haut
+_GLOW_FIRE = _RING * (0.4 + 0.6 * _yy / SIZE)   # plus présent en bas
+
+
 class Particles:
-    """Neige (froid) ou braises (chaud), intensité selon l'écart au seuil."""
+    """Neige (froid) ou braises (chaud) en « respiration » : halo sur le bord
+    et apparition des particules qui gonflent et retombent sur ~4 s.
+    L'intensité dépend de l'écart au seuil."""
 
     def __init__(self):
         self.snow: list[list[float]] = []
         self.fire: list[list[float]] = []
+        self.snow_k = self.fire_k = 0.0
+        self.breath = 0.0
 
     def step(self, temp: float | None) -> None:
         snow_k = fire_k = 0.0
         if temp is not None:
             snow_k = min(1.0, max(0.0, (SNOW_BELOW - temp) / 10 + 0.3)) if temp < SNOW_BELOW else 0.0
             fire_k = min(1.0, max(0.0, (temp - FIRE_ABOVE) / 15 + 0.3)) if temp > FIRE_ABOVE else 0.0
+        self.snow_k, self.fire_k = snow_k, fire_k
+        # 0 -> 1 -> 0, courbe douce (inspiration / expiration)
+        b = 0.5 - 0.5 * math.cos(2 * math.pi * time.monotonic() / BREATH_PERIOD_S)
+        self.breath = b * b * (3 - 2 * b)
+        snow_k *= 0.15 + 0.85 * self.breath
+        fire_k *= 0.15 + 0.85 * self.breath
 
         # neige : [x, y, vitesse, phase, rayon]
         for _ in range(int(snow_k * 2 + random.random() * snow_k * 2)):
@@ -99,12 +120,25 @@ class Particles:
             p[4] -= 1
         self.fire = [p for p in self.fire if p[4] > 0][-220:]
 
+    def background(self) -> Image.Image:
+        """Fond noir + halo qui respire (bleu glacé ou rouge braise)."""
+        a = np.zeros((SIZE, SIZE, 3), dtype=np.float32)
+        lvl = 0.25 + 0.75 * self.breath
+        if self.snow_k:
+            a += _GLOW_SNOW[..., None] * (np.array((90, 150, 255), np.float32) * self.snow_k * lvl)
+        if self.fire_k:
+            a += _GLOW_FIRE[..., None] * (np.array((255, 70, 10), np.float32) * self.fire_k * lvl)
+        return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
+
     def draw(self, d: ImageDraw.ImageDraw) -> None:
+        dim = 0.45 + 0.55 * self.breath  # les particules s'éclairent avec le souffle
         for x, y, _, _, r in self.snow:
-            d.ellipse((x - r, y - r, x + r, y + r), fill=(220, 235, 255))
+            d.ellipse((x - r, y - r, x + r, y + r),
+                      fill=(int(220 * dim), int(235 * dim), int(255 * dim)))
         for x, y, _, _, life, life_max in self.fire:
             k = life / life_max  # 1 = naissance (jaune), 0 = fin (rouge sombre)
             col = (255, int(60 + 180 * k), int(40 * k)) if k > 0.4 else (int(120 + 300 * k), int(30 * k), 0)
+            col = tuple(int(c * dim) for c in col)
             r = 1 + 3 * k
             d.ellipse((x - r, y - r, x + r, y + r), fill=col)
 
@@ -153,7 +187,7 @@ def _center_text(d: ImageDraw.ImageDraw, y: int, parts: list[tuple[str, tuple, I
 
 # --------------------------------------------------------------- rendu
 def render(v: View, particles: Particles) -> Image.Image:
-    im = Image.new("RGB", (SIZE, SIZE), (0, 0, 0))
+    im = particles.background()
     d = ImageDraw.Draw(im)
     particles.draw(d)
 
