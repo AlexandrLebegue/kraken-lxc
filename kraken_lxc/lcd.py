@@ -8,11 +8,12 @@ Confirmé visuellement le 2026-10-17 pour une image statique (type 0x06, RGB16).
 """
 from __future__ import annotations
 
+import time
+
 from liquidctl.driver.kraken3 import KrakenZ3
 
 BULK_MAGIC = [0x12, 0xFA, 0x01, 0xE8, 0xAB, 0xCD, 0xEF, 0x98, 0x76, 0x54, 0x32, 0x10]
 TYPE_STATIC_RGB16 = 0x06
-TYPE_GIF = 0x01
 
 
 def _send(dev: KrakenZ3, kind: int, data: bytes) -> None:
@@ -33,9 +34,23 @@ def show_image(dev: KrakenZ3, path: str, orientation: int = 0) -> None:
     _send(dev, TYPE_STATIC_RGB16, data)
 
 
-def show_gif(dev: KrakenZ3, path: str, orientation: int = 0) -> None:
-    """GIF natif (expérimental, non confirmé sur le Plus)."""
-    _send(dev, TYPE_GIF, dev._prepare_gif_file(path, orientation))
+def stream(dev: KrakenZ3, frames: list[bytes], fps: float = 10.0,
+           duration: float | None = None) -> None:
+    """Animation envoyée image par image depuis l'hôte.
+
+    Le GIF natif n'est PAS supporté sur le Plus via ce transfert : les octets du
+    GIF sont affichés comme des pixels bruts (bruit en haut de l'écran, testé le
+    2026-10-17). `frames` = images déjà converties par
+    `dev._prepare_static_file_rgb16`. Débit brut mesuré : ~55 img/s.
+    """
+    period = 1.0 / fps
+    start = time.monotonic()
+    i = 0
+    while duration is None or time.monotonic() - start < duration:
+        t = time.monotonic()
+        _send(dev, TYPE_STATIC_RGB16, frames[i % len(frames)])
+        i += 1
+        time.sleep(max(0.0, period - (time.monotonic() - t)))
 
 
 def show_liquid(dev: KrakenZ3) -> None:
