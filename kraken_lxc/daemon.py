@@ -82,7 +82,7 @@ class Poller(threading.Thread):
 def run(fps: float, temp_override: float | None) -> None:
     poller = Poller(temp_override)
     poller.start()
-    particles = render.Particles()
+    anim = render.Anim()
     dev = find_kraken()
     with dev.connect():
         dev.initialize()
@@ -96,8 +96,8 @@ def run(fps: float, temp_override: float | None) -> None:
                 hue.set_fans(list(colors))
                 last_colors = colors
                 log.info("couleurs ventilateurs : LXC %s, temp %s", *colors)
-            particles.step(view.cpu_temp)
-            lcd.send_frame(dev, render.to_rgb565(render.render(view, particles)))
+            anim.step(view.cpu_temp)
+            lcd.send_frame(dev, render.to_rgb565(render.render(view, anim)))
             time.sleep(max(0.0, period - (time.monotonic() - t0)))
 
 

@@ -1,14 +1,12 @@
 """Rendu du tableau de bord 240x240 pour l'écran rond du Kraken.
 
-Disposition : icônes LXC et OpenClaw (avec pastille de notifications), grande
-température CPU, barre de température, charge CPU et RAM. Un effet de particules
-traduit la température : orbes bleutés qui respirent quand le CPU est froid,
-orangés quand il chauffe.
+Disposition : robot (état des LXC : content, ou triste avec un « ! » rouge),
+homard OpenClaw (pastille de notifications), grande température CPU, barre de
+température animée (bleu/violet froid -> rouge/orange chaud), charge CPU et RAM.
 """
 from __future__ import annotations
 
 import math
-import random
 import time
 from dataclasses import dataclass
 
@@ -27,9 +25,7 @@ ORANGE = (255, 160, 40)
 RED = (240, 60, 50)
 BLUE = (40, 140, 255)
 
-# Seuils de l'effet (°C, Tctl du Ryzen) et bornes de la barre
-SNOW_BELOW = 45.0
-FIRE_ABOVE = 70.0
+# Bornes de la barre de température (°C, Tctl du Ryzen)
 BAR_MIN, BAR_MAX = 25.0, 90.0
 
 
@@ -66,117 +62,80 @@ def temp_color(t: float) -> tuple[int, int, int]:
     return tuple(int(a + (b - a) * k) for a, b in zip((170, 170, 170), RED))
 
 
-# --------------------------------------------------------------- orbes
-# Ronds lumineux et flous qui flottent lentement et « respirent » chacun à leur
-# rythme : bleutés quand le CPU est froid, orangés quand il chauffe.
-ORB_MAX = 14
-# Anneau extérieur (px depuis le centre) : le texte du milieu reste lisible.
-RING_IN, RING_OUT = 84, 112
-_COLD = [(110, 170, 255), (170, 210, 255), (80, 130, 230)]
-_HOT = [(255, 130, 40), (255, 80, 30), (255, 180, 70)]
+# --------------------------------------------------------------- barre animée
+# Barre de température « vivante » : un plasma qui grouille. Bleu / violet quand
+# le CPU est froid ; le rouge / orange gagne du terrain à mesure qu'il chauffe,
+# jusqu'à occuper toute la barre.
+BAR_X, BAR_Y, BAR_W, BAR_H = 50, 177, 140, 12
+_bx, _by = np.meshgrid(np.arange(BAR_W, dtype=np.float32), np.arange(BAR_H, dtype=np.float32))
+# masque à bouts arrondis
+_cap = BAR_H / 2
+_dxc = np.maximum(0, np.maximum(_cap - _bx - 0.5, _bx + 0.5 - (BAR_W - _cap)))
+_BAR_MASK = np.clip(_cap + 0.5 - np.hypot(_dxc, _by + 0.5 - _cap), 0, 1)
+_rng = np.random.default_rng(7)
+_SEED = _rng.random((BAR_H, BAR_W), dtype=np.float32)   # grain fixe, décalé dans le temps
+_C_BLUE = np.array((40, 90, 255), np.float32)
+_C_VIOLET = np.array((150, 50, 255), np.float32)
+_C_RED = np.array((255, 35, 20), np.float32)
+_C_ORANGE = np.array((255, 150, 20), np.float32)
 
 
-def _sprite(r: float) -> np.ndarray:
-    """Disque flou (gaussienne) de rayon visuel r, valeurs 0..1."""
-    n = int(r * 2.2) + 1
-    y, x = np.mgrid[-n:n + 1, -n:n + 1]
-    return np.exp(-(x * x + y * y) / (2 * (r * 0.55) ** 2)).astype(np.float32)
-
-
-class Particles:
-    """Orbes qui flottent et respirent. Leur nombre et leur éclat suivent
-    l'écart de température au seuil ; ils apparaissent et disparaissent en fondu."""
+class Anim:
+    """État des animations (temps, température lissée)."""
 
     def __init__(self):
-        self.orbs: list[dict] = []
-        self.kind = None          # "cold" ou "hot"
-        self.level = 0.0          # intensité globale, lissée (fondu)
         self._t0 = time.monotonic()
-
-    def _new_orb(self) -> dict:
-        """Orbe placé dans l'anneau extérieur, qui tourne lentement autour du centre."""
-        return {
-            "a": random.uniform(0, 2 * math.pi),                      # angle (rad)
-            "d": random.uniform(RING_IN, RING_OUT),                   # distance au centre
-            "w": random.choice((-1, 1)) * random.uniform(0.004, 0.009),  # vitesse angulaire
-            "vd": random.uniform(-0.25, 0.25),                        # dérive radiale
-            "r": random.uniform(5, 10), "period": random.uniform(5.0, 9.0),
-            "phase": random.uniform(0, 1), "ci": random.randrange(3), "fade": 0.0,
-        }
+        self.heat = None   # fraction de température lissée, 0 (froid) .. 1 (chaud)
 
     def step(self, temp: float | None) -> None:
-        cold_k = hot_k = 0.0
-        if temp is not None:
-            if temp < SNOW_BELOW:
-                cold_k = min(1.0, (SNOW_BELOW - temp) / 10 + 0.3)
-            elif temp > FIRE_ABOVE:
-                hot_k = min(1.0, (temp - FIRE_ABOVE) / 15 + 0.3)
-        kind = "cold" if cold_k else "hot" if hot_k else None
-        k = cold_k or hot_k
-        if kind != self.kind and self.level > 0.02:
-            target = 0.0                       # on éteint avant de changer de famille
-        else:
-            if kind != self.kind:
-                self.orbs = []
-            self.kind = kind
-            target = k
-        self.level += (target - self.level) * 0.03
-        want = int(round(4 + (ORB_MAX - 4) * k)) if self.kind else 0
-        while len(self.orbs) < want:
-            self.orbs.append(self._new_orb())
-        for i, o in enumerate(self.orbs):
-            o["fade"] = min(1.0, o["fade"] + 0.02) if i < want else max(0.0, o["fade"] - 0.02)
-            o["a"] += o["w"]
-            o["d"] += o["vd"]
-            if not RING_IN <= o["d"] <= RING_OUT:   # reste dans l'anneau : rebond doux
-                o["vd"] = -o["vd"]
-                o["d"] = min(RING_OUT, max(RING_IN, o["d"]))
-            o["x"] = CENTER + o["d"] * math.cos(o["a"])
-            o["y"] = CENTER + o["d"] * math.sin(o["a"])
-        self.orbs = [o for i, o in enumerate(self.orbs) if i < want or o["fade"] > 0]
+        f = 0.5 if temp is None else min(1.0, max(0.0, (temp - BAR_MIN) / (BAR_MAX - BAR_MIN)))
+        self.heat = f if self.heat is None else self.heat + (f - self.heat) * 0.05
 
-    def background(self) -> Image.Image:
-        a = np.zeros((SIZE, SIZE, 3), dtype=np.float32)
-        if self.kind and self.level > 0.005:
-            pal = _COLD if self.kind == "cold" else _HOT
-            t = time.monotonic() - self._t0
-            for o in self.orbs:
-                b = 0.5 - 0.5 * math.cos(2 * math.pi * (t / o["period"] + o["phase"]))
-                b = b * b * (3 - 2 * b)
-                r = o["r"] * (0.65 + 0.35 * b)
-                alpha = (0.2 + 0.8 * b) * o["fade"] * self.level
-                s = _sprite(r)
-                n = s.shape[0] // 2
-                x, y = int(o["x"]), int(o["y"])
-                x0, y0, x1, y1 = max(0, x - n), max(0, y - n), min(SIZE, x + n + 1), min(SIZE, y + n + 1)
-                if x0 >= x1 or y0 >= y1:
-                    continue
-                sub = s[y0 - (y - n):y1 - (y - n), x0 - (x - n):x1 - (x - n)]
-                a[y0:y1, x0:x1] += sub[..., None] * (np.array(pal[o["ci"]], np.float32) * alpha)
-        return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
-
-    def draw(self, d: ImageDraw.ImageDraw) -> None:
-        """Tout est déjà dans le fond (conservé pour l'API)."""
+    def bar(self) -> np.ndarray:
+        """Pixels RGB (BAR_H x BAR_W x 3, float) de la barre animée."""
+        t = time.monotonic() - self._t0
+        x, y = _bx, _by
+        # deux champs de plasma : couleur à l'intérieur d'une famille, et frontière chaud/froid
+        p = (np.sin(x * 0.13 + t * 2.1) + np.sin(y * 0.9 - t * 1.7 + x * 0.05)
+             + np.sin((x * 0.07 - y * 0.4) + t * 2.9)) / 3
+        q = (np.sin(x * 0.09 - t * 1.3) + np.sin(x * 0.21 + y * 0.6 + t * 2.3)) / 4 + 0.5
+        p = 0.5 + 0.5 * p
+        grain = np.roll(_SEED, int(t * 24) % BAR_W, axis=1)
+        p = np.clip(p * 0.85 + grain * 0.15, 0, 1)[..., None]
+        # proportion de pixels « chauds » : 0 sous BAR_MIN, tout au-dessus de BAR_MAX
+        h = self.heat * 1.2 - 0.1
+        hot = np.clip((h - q) * 5 + 0.5, 0, 1)[..., None]
+        cold_col = _C_BLUE * (1 - p) + _C_VIOLET * p
+        hot_col = _C_RED * (1 - p) + _C_ORANGE * p
+        col = cold_col * (1 - hot) + hot_col * hot
+        shimmer = (0.7 + 0.3 * np.sin(x * 0.5 + y * 1.3 - t * 6.0) * grain)[..., None]
+        return col * shimmer * _BAR_MASK[..., None]
 
 
 # --------------------------------------------------------------- icônes
-def _robot(d: ImageDraw.ImageDraw, cx: int, cy: int, col) -> None:
+def _robot(d: ImageDraw.ImageDraw, cx: int, cy: int, col, happy: bool = True) -> None:
     d.line((cx, cy - 26, cx, cy - 18), fill=col, width=2)
     d.ellipse((cx - 3, cy - 31, cx + 3, cy - 25), outline=col, width=2)
     d.rounded_rectangle((cx - 22, cy - 18, cx + 22, cy + 16), radius=10, outline=col, width=3)
     d.rectangle((cx - 27, cy - 5, cx - 23, cy + 5), fill=col)
     d.rectangle((cx + 23, cy - 5, cx + 27, cy + 5), fill=col)
-    d.arc((cx - 14, cy - 8, cx - 4, cy + 2), 200, 340, fill=col, width=2)
-    d.arc((cx + 4, cy - 8, cx + 14, cy + 2), 200, 340, fill=col, width=2)
-    d.arc((cx - 9, cy - 2, cx + 9, cy + 10), 20, 160, fill=col, width=2)
+    if happy:  # yeux plissés et sourire
+        d.arc((cx - 14, cy - 8, cx - 4, cy + 2), 200, 340, fill=col, width=2)
+        d.arc((cx + 4, cy - 8, cx + 14, cy + 2), 200, 340, fill=col, width=2)
+        d.arc((cx - 9, cy - 2, cx + 9, cy + 10), 20, 160, fill=col, width=2)
+    else:      # sourcils tombants, yeux ronds et bouche à l'envers
+        d.line((cx - 15, cy - 6, cx - 6, cy - 10), fill=col, width=2)
+        d.line((cx + 15, cy - 6, cx + 6, cy - 10), fill=col, width=2)
+        d.ellipse((cx - 12, cy - 4, cx - 7, cy + 1), fill=col)
+        d.ellipse((cx + 7, cy - 4, cx + 12, cy + 1), fill=col)
+        d.arc((cx - 9, cy + 5, cx + 9, cy + 15), 200, 340, fill=col, width=2)
 
 
 def _lobster(d: ImageDraw.ImageDraw, cx: int, cy: int, col) -> None:
     # pinces
     for s in (-1, 1):
         px = cx + s * 17
-        d.pieslice((px - 9, cy - 32, px + 9, cy - 14), 300 if s > 0 else 120,
-                   240 if s > 0 else 60, outline=col, width=2)
+        d.pieslice((px - 9, cy - 32, px + 9, cy - 14), 300, 240, outline=col, width=2)
         d.line((cx + s * 6, cy - 6, px, cy - 15), fill=col, width=2)
     # antennes
     d.line((cx - 3, cy - 10, cx - 10, cy - 30), fill=col, width=1)
@@ -202,28 +161,26 @@ def _center_text(d: ImageDraw.ImageDraw, y: int, parts: list[tuple[str, tuple, I
 
 
 # --------------------------------------------------------------- rendu
-def render(v: View, particles: Particles) -> Image.Image:
-    im = particles.background()
-    d = ImageDraw.Draw(im)
-    particles.draw(d)
+def _badge(d: ImageDraw.ImageDraw, x: int, y: int, text: str) -> None:
+    d.ellipse((x - 10, y - 10, x + 10, y + 10), fill=RED)
+    w = d.textlength(text, font=F_BADGE)
+    d.text((x - w / 2, y - 6), text, fill=WHITE, font=F_BADGE)
 
-    # icônes
-    lx, ox, iy = 80, 160, 52
-    _robot(d, lx, iy, WHITE)
+
+def render(v: View, anim: Anim) -> Image.Image:
+    im = Image.new("RGB", (SIZE, SIZE), (0, 0, 0))
+    d = ImageDraw.Draw(im)
+
+    # icônes : robot = état des LXC, homard = notifications OpenClaw
+    lx, ox, iy = 80, 160, 56
+    _robot(d, lx, iy, WHITE, happy=v.lxc_ok)
+    if not v.lxc_ok:
+        _badge(d, lx + 20, iy + 18, "!")
     _lobster(d, ox, iy, WHITE)
     if v.notifications:
-        n = str(min(v.notifications, 99))
-        bx, by = ox + 16, iy + 18
-        d.ellipse((bx - 10, by - 10, bx + 10, by + 10), fill=RED)
-        w = d.textlength(n, font=F_BADGE)
-        d.text((bx - w / 2, by - 6), n, fill=WHITE, font=F_BADGE)
-
-    state = ("OK", GREEN) if v.lxc_ok else (f"{v.lxc_running}/{v.lxc_expected}", ORANGE)
-    w1 = d.textlength("LXC: " + state[0], font=F_LABEL)
-    d.text((lx - w1 / 2, 86), "LXC: ", fill=WHITE, font=F_LABEL)
-    d.text((lx - w1 / 2 + d.textlength("LXC: ", font=F_LABEL), 86), state[0], fill=state[1], font=F_LABEL)
+        _badge(d, ox + 16, iy + 18, str(min(v.notifications, 99)))
     w2 = d.textlength("OPENCLAW", font=F_LABEL)
-    d.text((ox - w2 / 2, 86), "OPENCLAW", fill=WHITE, font=F_LABEL)
+    d.text((ox - w2 / 2, 90), "OPENCLAW", fill=WHITE, font=F_LABEL)
 
     # température
     t = v.cpu_temp
@@ -233,21 +190,19 @@ def render(v: View, particles: Particles) -> Image.Image:
     x0 = CENTER - (tw + uw) / 2
     d.text((x0, 102), txt, fill=WHITE, font=F_BIG, stroke_width=2, stroke_fill=(0, 0, 0))
     d.text((x0 + tw + 2, 110), "°C", fill=WHITE, font=F_UNIT)
-    _center_text(d, 160, [("CPU TEMP", GREY, F_SMALL)])
+    _center_text(d, 161, [("CPU TEMP", GREY, F_SMALL)])
 
-    # barre bleu -> rouge avec curseur
-    x_a, x_b, y = 52, 188, 179
-    for x in range(x_a, x_b):
-        c = temp_color(BAR_MIN + (BAR_MAX - BAR_MIN) * (x - x_a) / (x_b - x_a))
-        d.line((x, y - 2, x, y + 2), fill=c)
-    if t is not None:
-        k = min(1.0, max(0.0, (t - BAR_MIN) / (BAR_MAX - BAR_MIN)))
-        cx = x_a + k * (x_b - x_a)
-        d.ellipse((cx - 5, y - 5, cx + 5, y + 5), fill=WHITE)
+    # barre de température animée
+    a = np.asarray(im, dtype=np.float32).copy()
+    zone = a[BAR_Y:BAR_Y + BAR_H, BAR_X:BAR_X + BAR_W]
+    m = _BAR_MASK[..., None]
+    a[BAR_Y:BAR_Y + BAR_H, BAR_X:BAR_X + BAR_W] = zone * (1 - m) + anim.bar()
+    im = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
+    d = ImageDraw.Draw(im)
 
     load_col = GREEN if v.cpu_load < 50 else ORANGE if v.cpu_load < 85 else RED
-    _center_text(d, 190, [("CPU LOAD: ", WHITE, F_LABEL), (f"{v.cpu_load:.0f}%", load_col, F_LABEL)])
-    _center_text(d, 207, [(f"RAM: {v.ram_used:.1f} / {v.ram_total:.0f} GB", WHITE, F_SMALL)])
+    _center_text(d, 194, [("CPU LOAD: ", WHITE, F_LABEL), (f"{v.cpu_load:.0f}%", load_col, F_LABEL)])
+    _center_text(d, 211, [(f"RAM: {v.ram_used:.1f} / {v.ram_total:.0f} GB", WHITE, F_SMALL)])
     return im
 
 
