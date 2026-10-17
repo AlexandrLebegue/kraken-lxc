@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Démo : animation en boucle sur l'écran LCD (streaming image par image).
 
-Usage : demo.py [fps]   (Ctrl+C ou `systemctl stop kl-demo` pour arrêter)
+Usage : demo.py [fps] [images par tour]   (Ctrl+C ou `systemctl stop kl-demo` pour arrêter)
 """
 import sys
 
@@ -11,7 +11,7 @@ from kraken_lxc import lcd
 from kraken_lxc.hue2 import find_kraken
 
 FPS = float(sys.argv[1]) if len(sys.argv) > 1 else 10.0
-N = 12
+N = int(sys.argv[2]) if len(sys.argv) > 2 else 36
 
 dev = find_kraken()
 with dev.connect():
