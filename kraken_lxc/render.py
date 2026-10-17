@@ -2,7 +2,8 @@
 
 Disposition : robot (état des LXC : content, ou triste avec un « ! » rouge),
 homard OpenClaw (pastille de notifications), grande température CPU, barre de
-température animée (bleu/violet froid -> rouge/orange chaud), charge CPU et RAM.
+température d'une couleur qui respire (bleu/violet froid -> rouge/orange chaud),
+charge CPU et RAM.
 """
 from __future__ import annotations
 
@@ -63,19 +64,25 @@ def temp_color(t: float) -> tuple[int, int, int]:
 
 
 # --------------------------------------------------------------- barre animée
-# Barre de température « vivante » : un plasma qui grouille. Bleu / violet quand
-# le CPU est froid ; le rouge / orange gagne du terrain à mesure qu'il chauffe,
-# jusqu'à occuper toute la barre.
-BAR_X, BAR_Y, BAR_W, BAR_H = 50, 177, 140, 12
-_bx, _by = np.meshgrid(np.arange(BAR_W, dtype=np.float32), np.arange(BAR_H, dtype=np.float32))
-# masque à bouts arrondis
+# Barre de température d'une seule couleur, qui « respire » d'une teinte à
+# l'autre : bleu <-> violet à froid, rouge <-> orange à chaud ; entre les deux,
+# la paire de teintes glisse progressivement du froid vers le chaud.
+BAR_X, BAR_Y, BAR_W, BAR_H = 50, 177, 140, 10
+BAR_BREATH_S = 2.0   # un cycle complet de respiration
+GLOW = 6             # halo autour de la barre (px)
+_gx, _gy = np.meshgrid(np.arange(BAR_W + 2 * GLOW, dtype=np.float32) - GLOW,
+                       np.arange(BAR_H + 2 * GLOW, dtype=np.float32) - GLOW)
 _cap = BAR_H / 2
-_dxc = np.maximum(0, np.maximum(_cap - _bx - 0.5, _bx + 0.5 - (BAR_W - _cap)))
-_BAR_MASK = np.clip(_cap + 0.5 - np.hypot(_dxc, _by + 0.5 - _cap), 0, 1)
-BAR_BREATH_S = 1.6   # respiration rapide de la barre
-_C_BLUE = np.array((40, 90, 255), np.float32)
-_C_VIOLET = np.array((150, 50, 255), np.float32)
-_C_RED = np.array((255, 35, 20), np.float32)
+# distance à la « gélule » (rectangle à bouts ronds) : <0 dedans, >0 dehors
+_dx = np.maximum(0, np.maximum(_cap - (_gx + 0.5), (_gx + 0.5) - (BAR_W - _cap)))
+_DIST = np.hypot(_dx, (_gy + 0.5) - _cap) - _cap
+_INSIDE = np.clip(0.5 - _DIST, 0, 1)                       # anticrénelé
+_HALO = np.exp(-np.maximum(_DIST, 0) / 2.5) * (1 - _INSIDE)
+# reflet : bande claire en haut de la barre, pour un effet « verre »
+_SHINE = np.clip(1 - np.abs((_gy + 0.5) - BAR_H * 0.3) / (BAR_H * 0.35), 0, 1) * _INSIDE
+_C_BLUE = np.array((30, 90, 255), np.float32)
+_C_VIOLET = np.array((160, 50, 255), np.float32)
+_C_RED = np.array((255, 30, 25), np.float32)
 _C_ORANGE = np.array((255, 150, 20), np.float32)
 
 
@@ -90,29 +97,22 @@ class Anim:
         f = 0.5 if temp is None else min(1.0, max(0.0, (temp - BAR_MIN) / (BAR_MAX - BAR_MIN)))
         self.heat = f if self.heat is None else self.heat + (f - self.heat) * 0.05
 
-    def bar(self) -> np.ndarray:
-        """Pixels RGB (BAR_H x BAR_W x 3, float) de la barre animée.
+    def color(self) -> np.ndarray:
+        b = 0.5 - 0.5 * math.cos(2 * math.pi * (time.monotonic() - self._t0) / BAR_BREATH_S)
+        b = b * b * (3 - 2 * b)
+        h = self.heat * self.heat * (3 - 2 * self.heat)
+        first = _C_BLUE * (1 - h) + _C_RED * h
+        second = _C_VIOLET * (1 - h) + _C_ORANGE * h
+        c = first * (1 - b) + second * b
+        return c * (255.0 / max(1.0, float(c.max())))   # garde des teintes vives au milieu
 
-        Nappes de couleur larges et douces qui glissent et se superposent, avec
-        une respiration rapide (~1,6 s) de l'éclat et du mélange.
-        """
-        t = time.monotonic() - self._t0
-        x, y = _bx, _by
-        breath = 0.5 - 0.5 * math.cos(2 * math.pi * t / BAR_BREATH_S)
-        # teinte à l'intérieur d'une famille (bleu<->violet, rouge<->orange)
-        p = 0.5 + 0.25 * (np.sin(x * 0.045 + t * 1.6) + np.sin(x * 0.028 - y * 0.12 - t * 1.1))
-        # frontière chaud / froid : grandes nappes qui ondulent avec le souffle
-        q = 0.5 + 0.22 * (np.sin(x * 0.035 - t * 0.9) + np.sin(x * 0.06 + y * 0.15 + t * 1.3)) \
-            + 0.08 * (breath - 0.5)
-        h = self.heat * 1.2 - 0.1
-        hot = np.clip((h - q) * 2.5 + 0.5, 0, 1)
-        hot = (hot * hot * (3 - 2 * hot))[..., None]          # fondu doux
-        p = p[..., None]
-        cold_col = _C_BLUE * (1 - p) + _C_VIOLET * p
-        hot_col = _C_RED * (1 - p) + _C_ORANGE * p
-        col = cold_col * (1 - hot) + hot_col * hot
-        glow = 0.72 + 0.28 * breath
-        return col * glow * _BAR_MASK[..., None]
+    def paint(self, a: np.ndarray) -> None:
+        """Dessine la barre (et son halo) dans le tableau RGB float `a`."""
+        c = self.color()
+        y0, x0 = BAR_Y - GLOW, BAR_X - GLOW
+        zone = a[y0:y0 + BAR_H + 2 * GLOW, x0:x0 + BAR_W + 2 * GLOW]
+        body = c * _INSIDE[..., None] + (255 - c) * 0.35 * _SHINE[..., None]
+        zone[:] = zone * (1 - _INSIDE[..., None]) + body + c * 0.45 * _HALO[..., None]
 
 
 # --------------------------------------------------------------- icônes
@@ -195,9 +195,7 @@ def render(v: View, anim: Anim) -> Image.Image:
 
     # barre de température animée
     a = np.asarray(im, dtype=np.float32).copy()
-    zone = a[BAR_Y:BAR_Y + BAR_H, BAR_X:BAR_X + BAR_W]
-    m = _BAR_MASK[..., None]
-    a[BAR_Y:BAR_Y + BAR_H, BAR_X:BAR_X + BAR_W] = zone * (1 - m) + anim.bar()
+    anim.paint(a)
     im = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
     d = ImageDraw.Draw(im)
 
