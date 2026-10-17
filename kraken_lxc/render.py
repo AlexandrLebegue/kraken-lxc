@@ -70,6 +70,8 @@ def temp_color(t: float) -> tuple[int, int, int]:
 # Ronds lumineux et flous qui flottent lentement et « respirent » chacun à leur
 # rythme : bleutés quand le CPU est froid, orangés quand il chauffe.
 ORB_MAX = 14
+# Anneau extérieur (px depuis le centre) : le texte du milieu reste lisible.
+RING_IN, RING_OUT = 84, 112
 _COLD = [(110, 170, 255), (170, 210, 255), (80, 130, 230)]
 _HOT = [(255, 130, 40), (255, 80, 30), (255, 180, 70)]
 
@@ -92,14 +94,13 @@ class Particles:
         self._t0 = time.monotonic()
 
     def _new_orb(self) -> dict:
-        a = random.uniform(0, 2 * math.pi)
-        d = random.uniform(0, 95)
-        speed = random.uniform(0.08, 0.25)
-        heading = random.uniform(0, 2 * math.pi)
+        """Orbe placé dans l'anneau extérieur, qui tourne lentement autour du centre."""
         return {
-            "x": CENTER + d * math.cos(a), "y": CENTER + d * math.sin(a),
-            "vx": speed * math.cos(heading), "vy": speed * math.sin(heading),
-            "r": random.uniform(9, 22), "period": random.uniform(5.0, 9.0),
+            "a": random.uniform(0, 2 * math.pi),                      # angle (rad)
+            "d": random.uniform(RING_IN, RING_OUT),                   # distance au centre
+            "w": random.choice((-1, 1)) * random.uniform(0.004, 0.009),  # vitesse angulaire
+            "vd": random.uniform(-0.25, 0.25),                        # dérive radiale
+            "r": random.uniform(5, 10), "period": random.uniform(5.0, 9.0),
             "phase": random.uniform(0, 1), "ci": random.randrange(3), "fade": 0.0,
         }
 
@@ -125,11 +126,13 @@ class Particles:
             self.orbs.append(self._new_orb())
         for i, o in enumerate(self.orbs):
             o["fade"] = min(1.0, o["fade"] + 0.02) if i < want else max(0.0, o["fade"] - 0.02)
-            o["x"] += o["vx"]
-            o["y"] += o["vy"]
-            dx, dy = o["x"] - CENTER, o["y"] - CENTER
-            if dx * dx + dy * dy > 100 ** 2:   # reste dans l'écran rond : on rebrousse chemin
-                o["vx"], o["vy"] = -o["vx"] + random.uniform(-0.05, 0.05), -o["vy"] + random.uniform(-0.05, 0.05)
+            o["a"] += o["w"]
+            o["d"] += o["vd"]
+            if not RING_IN <= o["d"] <= RING_OUT:   # reste dans l'anneau : rebond doux
+                o["vd"] = -o["vd"]
+                o["d"] = min(RING_OUT, max(RING_IN, o["d"]))
+            o["x"] = CENTER + o["d"] * math.cos(o["a"])
+            o["y"] = CENTER + o["d"] * math.sin(o["a"])
         self.orbs = [o for i, o in enumerate(self.orbs) if i < want or o["fade"] > 0]
 
     def background(self) -> Image.Image:
@@ -141,7 +144,7 @@ class Particles:
                 b = 0.5 - 0.5 * math.cos(2 * math.pi * (t / o["period"] + o["phase"]))
                 b = b * b * (3 - 2 * b)
                 r = o["r"] * (0.65 + 0.35 * b)
-                alpha = (0.12 + 0.6 * b) * o["fade"] * self.level
+                alpha = (0.2 + 0.8 * b) * o["fade"] * self.level
                 s = _sprite(r)
                 n = s.shape[0] // 2
                 x, y = int(o["x"]), int(o["y"])
