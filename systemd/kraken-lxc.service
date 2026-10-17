@@ -1,0 +1,14 @@
+[Unit]
+Description=kraken-lxc : écran et couleurs NZXT Kraken selon l'état des LXC
+After=pve-guests.service
+Wants=pve-guests.service
+
+[Service]
+WorkingDirectory=/opt/kraken-lxc
+ExecStart=/opt/pipx/venvs/liquidctl/bin/python -m kraken_lxc.daemon --fps 15
+Restart=always
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
