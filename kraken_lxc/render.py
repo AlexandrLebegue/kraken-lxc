@@ -2,7 +2,8 @@
 
 Disposition : icônes LXC et OpenClaw (avec pastille de notifications), grande
 température CPU, barre de température, charge CPU et RAM. Un effet de particules
-traduit la température : neige quand le CPU est froid, feu quand il chauffe.
+traduit la température : orbes bleutés qui respirent quand le CPU est froid,
+orangés quand il chauffe.
 """
 from __future__ import annotations
 
@@ -65,82 +66,94 @@ def temp_color(t: float) -> tuple[int, int, int]:
     return tuple(int(a + (b - a) * k) for a, b in zip((170, 170, 170), RED))
 
 
-# --------------------------------------------------------------- particules
-BREATH_PERIOD_S = 4.0
+# --------------------------------------------------------------- orbes
+# Ronds lumineux et flous qui flottent lentement et « respirent » chacun à leur
+# rythme : bleutés quand le CPU est froid, orangés quand il chauffe.
+ORB_MAX = 14
+_COLD = [(110, 170, 255), (170, 210, 255), (80, 130, 230)]
+_HOT = [(255, 130, 40), (255, 80, 30), (255, 180, 70)]
 
-# Halo sur le bord de l'écran rond : 0 au centre, 1 sur le bord.
-_yy, _xx = np.mgrid[0:SIZE, 0:SIZE]
-_R = np.hypot(_xx - CENTER + 0.5, _yy - CENTER + 0.5)
-_RING = np.clip((_R - 70) / 50, 0, 1) ** 1.6
-_GLOW_SNOW = _RING * (1.0 - 0.6 * _yy / SIZE)   # plus présent en haut
-_GLOW_FIRE = _RING * (0.4 + 0.6 * _yy / SIZE)   # plus présent en bas
+
+def _sprite(r: float) -> np.ndarray:
+    """Disque flou (gaussienne) de rayon visuel r, valeurs 0..1."""
+    n = int(r * 2.2) + 1
+    y, x = np.mgrid[-n:n + 1, -n:n + 1]
+    return np.exp(-(x * x + y * y) / (2 * (r * 0.55) ** 2)).astype(np.float32)
 
 
 class Particles:
-    """Neige (froid) ou braises (chaud) en « respiration » : halo sur le bord
-    et apparition des particules qui gonflent et retombent sur ~4 s.
-    L'intensité dépend de l'écart au seuil."""
+    """Orbes qui flottent et respirent. Leur nombre et leur éclat suivent
+    l'écart de température au seuil ; ils apparaissent et disparaissent en fondu."""
 
     def __init__(self):
-        self.snow: list[list[float]] = []
-        self.fire: list[list[float]] = []
-        self.snow_k = self.fire_k = 0.0
-        self.breath = 0.0
+        self.orbs: list[dict] = []
+        self.kind = None          # "cold" ou "hot"
+        self.level = 0.0          # intensité globale, lissée (fondu)
+        self._t0 = time.monotonic()
+
+    def _new_orb(self) -> dict:
+        a = random.uniform(0, 2 * math.pi)
+        d = random.uniform(0, 95)
+        speed = random.uniform(0.08, 0.25)
+        heading = random.uniform(0, 2 * math.pi)
+        return {
+            "x": CENTER + d * math.cos(a), "y": CENTER + d * math.sin(a),
+            "vx": speed * math.cos(heading), "vy": speed * math.sin(heading),
+            "r": random.uniform(9, 22), "period": random.uniform(5.0, 9.0),
+            "phase": random.uniform(0, 1), "ci": random.randrange(3), "fade": 0.0,
+        }
 
     def step(self, temp: float | None) -> None:
-        snow_k = fire_k = 0.0
+        cold_k = hot_k = 0.0
         if temp is not None:
-            snow_k = min(1.0, max(0.0, (SNOW_BELOW - temp) / 10 + 0.3)) if temp < SNOW_BELOW else 0.0
-            fire_k = min(1.0, max(0.0, (temp - FIRE_ABOVE) / 15 + 0.3)) if temp > FIRE_ABOVE else 0.0
-        self.snow_k, self.fire_k = snow_k, fire_k
-        # 0 -> 1 -> 0, courbe douce (inspiration / expiration)
-        b = 0.5 - 0.5 * math.cos(2 * math.pi * time.monotonic() / BREATH_PERIOD_S)
-        self.breath = b * b * (3 - 2 * b)
-        snow_k *= 0.15 + 0.85 * self.breath
-        fire_k *= 0.15 + 0.85 * self.breath
-
-        # neige : [x, y, vitesse, phase, rayon]
-        for _ in range(int(snow_k * 2 + random.random() * snow_k * 2)):
-            self.snow.append([random.uniform(20, 220), -4.0, random.uniform(0.8, 2.0),
-                              random.uniform(0, 6.28), random.choice((1, 1, 2))])
-        for p in self.snow:
-            p[1] += p[2]
-            p[3] += 0.08
-            p[0] += math.sin(p[3]) * 0.6
-        self.snow = [p for p in self.snow if p[1] < SIZE + 4][-120:]
-
-        # feu : [x, y, vx, vy, vie, vie_max]
-        for _ in range(int(fire_k * 5 + random.random() * fire_k * 4)):
-            life = random.uniform(18, 34)
-            self.fire.append([random.gauss(CENTER, 45), SIZE - 8.0, random.uniform(-0.5, 0.5),
-                              random.uniform(-3.2, -1.6), life, life])
-        for p in self.fire:
-            p[0] += p[2] + random.uniform(-0.4, 0.4)
-            p[1] += p[3]
-            p[4] -= 1
-        self.fire = [p for p in self.fire if p[4] > 0][-220:]
+            if temp < SNOW_BELOW:
+                cold_k = min(1.0, (SNOW_BELOW - temp) / 10 + 0.3)
+            elif temp > FIRE_ABOVE:
+                hot_k = min(1.0, (temp - FIRE_ABOVE) / 15 + 0.3)
+        kind = "cold" if cold_k else "hot" if hot_k else None
+        k = cold_k or hot_k
+        if kind != self.kind and self.level > 0.02:
+            target = 0.0                       # on éteint avant de changer de famille
+        else:
+            if kind != self.kind:
+                self.orbs = []
+            self.kind = kind
+            target = k
+        self.level += (target - self.level) * 0.03
+        want = int(round(4 + (ORB_MAX - 4) * k)) if self.kind else 0
+        while len(self.orbs) < want:
+            self.orbs.append(self._new_orb())
+        for i, o in enumerate(self.orbs):
+            o["fade"] = min(1.0, o["fade"] + 0.02) if i < want else max(0.0, o["fade"] - 0.02)
+            o["x"] += o["vx"]
+            o["y"] += o["vy"]
+            dx, dy = o["x"] - CENTER, o["y"] - CENTER
+            if dx * dx + dy * dy > 100 ** 2:   # reste dans l'écran rond : on rebrousse chemin
+                o["vx"], o["vy"] = -o["vx"] + random.uniform(-0.05, 0.05), -o["vy"] + random.uniform(-0.05, 0.05)
+        self.orbs = [o for i, o in enumerate(self.orbs) if i < want or o["fade"] > 0]
 
     def background(self) -> Image.Image:
-        """Fond noir + halo qui respire (bleu glacé ou rouge braise)."""
         a = np.zeros((SIZE, SIZE, 3), dtype=np.float32)
-        lvl = 0.25 + 0.75 * self.breath
-        if self.snow_k:
-            a += _GLOW_SNOW[..., None] * (np.array((90, 150, 255), np.float32) * self.snow_k * lvl)
-        if self.fire_k:
-            a += _GLOW_FIRE[..., None] * (np.array((255, 70, 10), np.float32) * self.fire_k * lvl)
+        if self.kind and self.level > 0.005:
+            pal = _COLD if self.kind == "cold" else _HOT
+            t = time.monotonic() - self._t0
+            for o in self.orbs:
+                b = 0.5 - 0.5 * math.cos(2 * math.pi * (t / o["period"] + o["phase"]))
+                b = b * b * (3 - 2 * b)
+                r = o["r"] * (0.65 + 0.35 * b)
+                alpha = (0.12 + 0.6 * b) * o["fade"] * self.level
+                s = _sprite(r)
+                n = s.shape[0] // 2
+                x, y = int(o["x"]), int(o["y"])
+                x0, y0, x1, y1 = max(0, x - n), max(0, y - n), min(SIZE, x + n + 1), min(SIZE, y + n + 1)
+                if x0 >= x1 or y0 >= y1:
+                    continue
+                sub = s[y0 - (y - n):y1 - (y - n), x0 - (x - n):x1 - (x - n)]
+                a[y0:y1, x0:x1] += sub[..., None] * (np.array(pal[o["ci"]], np.float32) * alpha)
         return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
 
     def draw(self, d: ImageDraw.ImageDraw) -> None:
-        dim = 0.45 + 0.55 * self.breath  # les particules s'éclairent avec le souffle
-        for x, y, _, _, r in self.snow:
-            d.ellipse((x - r, y - r, x + r, y + r),
-                      fill=(int(220 * dim), int(235 * dim), int(255 * dim)))
-        for x, y, _, _, life, life_max in self.fire:
-            k = life / life_max  # 1 = naissance (jaune), 0 = fin (rouge sombre)
-            col = (255, int(60 + 180 * k), int(40 * k)) if k > 0.4 else (int(120 + 300 * k), int(30 * k), 0)
-            col = tuple(int(c * dim) for c in col)
-            r = 1 + 3 * k
-            d.ellipse((x - r, y - r, x + r, y + r), fill=col)
+        """Tout est déjà dans le fond (conservé pour l'API)."""
 
 
 # --------------------------------------------------------------- icônes
