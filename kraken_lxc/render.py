@@ -72,8 +72,7 @@ _bx, _by = np.meshgrid(np.arange(BAR_W, dtype=np.float32), np.arange(BAR_H, dtyp
 _cap = BAR_H / 2
 _dxc = np.maximum(0, np.maximum(_cap - _bx - 0.5, _bx + 0.5 - (BAR_W - _cap)))
 _BAR_MASK = np.clip(_cap + 0.5 - np.hypot(_dxc, _by + 0.5 - _cap), 0, 1)
-_rng = np.random.default_rng(7)
-_SEED = _rng.random((BAR_H, BAR_W), dtype=np.float32)   # grain fixe, décalé dans le temps
+BAR_BREATH_S = 1.6   # respiration rapide de la barre
 _C_BLUE = np.array((40, 90, 255), np.float32)
 _C_VIOLET = np.array((150, 50, 255), np.float32)
 _C_RED = np.array((255, 35, 20), np.float32)
@@ -92,24 +91,28 @@ class Anim:
         self.heat = f if self.heat is None else self.heat + (f - self.heat) * 0.05
 
     def bar(self) -> np.ndarray:
-        """Pixels RGB (BAR_H x BAR_W x 3, float) de la barre animée."""
+        """Pixels RGB (BAR_H x BAR_W x 3, float) de la barre animée.
+
+        Nappes de couleur larges et douces qui glissent et se superposent, avec
+        une respiration rapide (~1,6 s) de l'éclat et du mélange.
+        """
         t = time.monotonic() - self._t0
         x, y = _bx, _by
-        # deux champs de plasma : couleur à l'intérieur d'une famille, et frontière chaud/froid
-        p = (np.sin(x * 0.13 + t * 2.1) + np.sin(y * 0.9 - t * 1.7 + x * 0.05)
-             + np.sin((x * 0.07 - y * 0.4) + t * 2.9)) / 3
-        q = (np.sin(x * 0.09 - t * 1.3) + np.sin(x * 0.21 + y * 0.6 + t * 2.3)) / 4 + 0.5
-        p = 0.5 + 0.5 * p
-        grain = np.roll(_SEED, int(t * 24) % BAR_W, axis=1)
-        p = np.clip(p * 0.85 + grain * 0.15, 0, 1)[..., None]
-        # proportion de pixels « chauds » : 0 sous BAR_MIN, tout au-dessus de BAR_MAX
+        breath = 0.5 - 0.5 * math.cos(2 * math.pi * t / BAR_BREATH_S)
+        # teinte à l'intérieur d'une famille (bleu<->violet, rouge<->orange)
+        p = 0.5 + 0.25 * (np.sin(x * 0.045 + t * 1.6) + np.sin(x * 0.028 - y * 0.12 - t * 1.1))
+        # frontière chaud / froid : grandes nappes qui ondulent avec le souffle
+        q = 0.5 + 0.22 * (np.sin(x * 0.035 - t * 0.9) + np.sin(x * 0.06 + y * 0.15 + t * 1.3)) \
+            + 0.08 * (breath - 0.5)
         h = self.heat * 1.2 - 0.1
-        hot = np.clip((h - q) * 5 + 0.5, 0, 1)[..., None]
+        hot = np.clip((h - q) * 2.5 + 0.5, 0, 1)
+        hot = (hot * hot * (3 - 2 * hot))[..., None]          # fondu doux
+        p = p[..., None]
         cold_col = _C_BLUE * (1 - p) + _C_VIOLET * p
         hot_col = _C_RED * (1 - p) + _C_ORANGE * p
         col = cold_col * (1 - hot) + hot_col * hot
-        shimmer = (0.7 + 0.3 * np.sin(x * 0.5 + y * 1.3 - t * 6.0) * grain)[..., None]
-        return col * shimmer * _BAR_MASK[..., None]
+        glow = 0.72 + 0.28 * breath
+        return col * glow * _BAR_MASK[..., None]
 
 
 # --------------------------------------------------------------- icônes
@@ -172,15 +175,13 @@ def render(v: View, anim: Anim) -> Image.Image:
     d = ImageDraw.Draw(im)
 
     # icônes : robot = état des LXC, homard = notifications OpenClaw
-    lx, ox, iy = 80, 160, 56
+    lx, ox, iy = 80, 160, 60
     _robot(d, lx, iy, WHITE, happy=v.lxc_ok)
     if not v.lxc_ok:
         _badge(d, lx + 20, iy + 18, "!")
     _lobster(d, ox, iy, WHITE)
     if v.notifications:
         _badge(d, ox + 16, iy + 18, str(min(v.notifications, 99)))
-    w2 = d.textlength("OPENCLAW", font=F_LABEL)
-    d.text((ox - w2 / 2, 90), "OPENCLAW", fill=WHITE, font=F_LABEL)
 
     # température
     t = v.cpu_temp
