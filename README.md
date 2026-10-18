@@ -30,4 +30,6 @@ Test des couleurs : `python -m kraken_lxc.daemon --temp-override 30` (froid) ou 
 
 ## Licences tierces
 OpenKraken (MIT), kori (GPL-3.0, méthode de synchronisation), liquidctl (GPL-3.0).
-Choisir une licence compatible GPL-3.0 avant publication.
+
+## Licence
+GPL-3.0-or-later (voir `LICENSE`).
