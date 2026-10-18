@@ -19,6 +19,7 @@ from __future__ import annotations
 import time
 
 from liquidctl.driver.kraken3 import KrakenZ3
+from liquidctl.error import Timeout as UsbTimeout
 
 BULK_MAGIC = [0x12, 0xFA, 0x01, 0xE8, 0xAB, 0xCD, 0xEF, 0x98, 0x76, 0x54, 0x32, 0x10]
 TYPE_STATIC_RGB16 = 0x06
@@ -41,7 +42,10 @@ def _await_ack(dev: KrakenZ3, sub: int) -> bool:
     """
     deadline = time.monotonic() + ACK_TIMEOUT_S
     while (left := deadline - time.monotonic()) > 0:
-        msg = dev.device.read(REPORT_LEN, timeout=max(1, int(left * 1000)))
+        try:
+            msg = dev.device.read(REPORT_LEN, timeout=max(1, int(left * 1000)))
+        except UsbTimeout:   # liquidctl lève une exception au lieu de renvoyer vide
+            return False
         if msg and msg[0] == ACK and msg[1] == sub:
             return True
     return False

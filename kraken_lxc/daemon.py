@@ -20,7 +20,6 @@ from . import lcd, metrics, notify, render
 from .hue2 import Hue2, find_kraken
 
 log = logging.getLogger("kraken-lxc")
-_board: "BoardLight | None" = None
 
 
 def _fusion():
@@ -85,16 +84,9 @@ class Poller(threading.Thread):
                 log.exception("relevés")
 
 
-def run(fps: float, temp_override: float | None) -> None:
-    poller = Poller(temp_override)
-    poller.start()
-    anim = render.Anim()
-    anim.step(poller.view.cpu_temp)
-    global _board
-    if _board is None or not _board.is_alive():  # un seul thread, même après une reprise
-        _board = BoardLight(anim)
-        _board.start()
-    _board.anim = anim
+def run(fps: float, poller: Poller, anim: render.Anim) -> None:
+    """Boucle d'affichage. Relancée après une erreur USB ; les threads (relevés,
+    carte mère) sont créés une seule fois dans main() et réutilisés."""
     dev = find_kraken()
     with dev.connect():
         dev.initialize()
@@ -120,9 +112,14 @@ def main() -> None:
                    help="force la température (test des couleurs)")
     a = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    poller = Poller(a.temp_override)
+    poller.start()
+    anim = render.Anim()
+    anim.step(poller.view.cpu_temp)
+    BoardLight(anim).start()
     while True:
         try:
-            run(a.fps, a.temp_override)
+            run(a.fps, poller, anim)
         except KeyboardInterrupt:
             break
         except Exception:
