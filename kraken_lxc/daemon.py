@@ -20,6 +20,7 @@ from . import lcd, metrics, notify, render
 from .hue2 import Hue2, find_kraken
 
 log = logging.getLogger("kraken-lxc")
+FAN_RATE = 3.5  # mises à jour couleur ventilateurs par seconde
 
 
 def _fusion():
@@ -93,11 +94,13 @@ def run(fps: float, poller: Poller, anim: render.Anim) -> None:
         hue = Hue2(dev)
         period = 1.0 / fps
         frame = 0
+        next_fan = 0.0
         while True:
             t0 = time.monotonic()
             view = poller.view
             anim.step(view.cpu_temp)
-            if frame % 5 == 0:  # ventilateurs : ~3 màj/s (2/s OK, 4/s ignoré par le Kraken)
+            if t0 >= next_fan:  # ventilateurs : cadence limitée (3/s OK, 4/s ignoré par le Kraken)
+                next_fan = t0 + 1.0 / FAN_RATE
                 c = render.light_color(anim.heat, t0 - anim._t0)
                 hue.set_fans([c, c])
             lcd.send_frame(dev, render.to_rgb565(render.render(view, anim)))
