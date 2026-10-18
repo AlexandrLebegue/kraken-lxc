@@ -20,7 +20,7 @@ from . import lcd, metrics, notify, render
 from .hue2 import Hue2, find_kraken
 
 log = logging.getLogger("kraken-lxc")
-FAN_RATE = 3.75  # mises à jour couleur ventilateurs par seconde
+FAN_RATE = 3.5  # màj couleur ventilateurs /s : max fiable mesuré (3.75 et 4 ignorés par le Kraken)
 
 
 def _fusion():

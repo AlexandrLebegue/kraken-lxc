@@ -76,7 +76,7 @@ _C_RED = np.array((255, 30, 25), np.float32)
 _C_ORANGE = np.array((255, 150, 20), np.float32)
 
 
-LIGHT_BREATH_S = 6.0  # respiration plus lente des ventilateurs et de la carte mère
+LIGHT_BREATH_S = 12.0  # respiration lente des ventilateurs et de la carte mère
 
 
 def palette(heat: float, t: float, period: float) -> np.ndarray:
