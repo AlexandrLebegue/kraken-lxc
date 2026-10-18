@@ -97,7 +97,7 @@ def run(fps: float, poller: Poller, anim: render.Anim) -> None:
             t0 = time.monotonic()
             view = poller.view
             anim.step(view.cpu_temp)
-            if frame % 4 == 0:  # ventilateurs : ~4 màj/s max (OpenKraken plafonne à 5 img/s)
+            if frame % 8 == 0:  # ventilateurs : ~2 màj/s (1/s confirmé OK, ~4/s ignoré)
                 c = render.light_color(anim.heat, t0 - anim._t0)
                 hue.set_fans([c, c])
             lcd.send_frame(dev, render.to_rgb565(render.render(view, anim)))
