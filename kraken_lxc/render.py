@@ -76,7 +76,7 @@ _C_RED = np.array((255, 30, 25), np.float32)
 _C_ORANGE = np.array((255, 150, 20), np.float32)
 
 
-LIGHT_BREATH_S = 12.0  # respiration lente des ventilateurs et de la carte mère
+LIGHT_BREATH_S = 20.0  # respiration lente des ventilateurs et de la carte mère
 
 
 def palette(heat: float, t: float, period: float) -> np.ndarray:
@@ -97,7 +97,7 @@ def palette(heat: float, t: float, period: float) -> np.ndarray:
 def light_color(heat: float, t: float) -> tuple[int, int, int]:
     """Couleur des LED : même palette, respiration lente, éclat qui pulse aussi."""
     b = 0.5 - 0.5 * math.cos(2 * math.pi * t / LIGHT_BREATH_S)
-    c = palette(heat, t, LIGHT_BREATH_S) * (0.45 + 0.55 * b)
+    c = palette(heat, t, LIGHT_BREATH_S) * (0.8 + 0.2 * b)  # éclat peu modulé : les sauts se voient surtout dans le sombre
     return tuple(int(x) for x in c)
 
 

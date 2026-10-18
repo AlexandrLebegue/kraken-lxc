@@ -9,7 +9,7 @@ et de la carte mère (Gigabyte RGB Fusion 2.0, `048d:5702`) selon l'état d'un h
   température d'une couleur qui respire (2 s), charge CPU, RAM.
 - **Palette de température** (barre, ventilateurs, carte mère) : bleu <-> violet à froid, rouge <->
   orange à chaud, transition progressive entre les deux (25 -> 90 °C).
-- **Ventilateurs + carte mère** : même palette, respiration lente (12 s, teinte et éclat), 3,5 màj/s max sur les ventilateurs.
+- **Ventilateurs + carte mère** : même palette, respiration lente (20 s, teinte et éclat), 3,5 màj/s max sur les ventilateurs.
 - **Notifications** : `kl-notify add|clear|count` (état dans `/run/kraken-lxc/notify.json`).
   Le hook OpenClaw `integrations/openclaw-hook` incrémente à chaque message envoyé sur Telegram
   et remet à zéro quand l'utilisateur répond (Telegram ne fournit pas d'accusé de lecture aux bots).
