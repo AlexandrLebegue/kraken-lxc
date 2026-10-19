@@ -5,7 +5,7 @@ Wants=pve-guests.service
 
 [Service]
 WorkingDirectory=/opt/kraken-lxc
-ExecStart=/opt/pipx/venvs/liquidctl/bin/python -m kraken_lxc.daemon --fps 15
+ExecStart=/opt/pipx/venvs/liquidctl/bin/python -m kraken_lxc.daemon --fps 15 --lights-off 00:00 --lights-on 07:00 --fade 6
 Restart=always
 RestartSec=5
 Nice=10

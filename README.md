@@ -10,6 +10,9 @@ et de la carte mère (Gigabyte RGB Fusion 2.0, `048d:5702`) selon l'état d'un h
 - **Palette de température** (barre, ventilateurs, carte mère) : bleu <-> violet à froid, rouge <->
   orange à chaud, transition progressive entre les deux (25 -> 90 °C).
 - **Ventilateurs + carte mère** : même palette, respiration lente (20 s, teinte et éclat), 3,5 màj/s max sur les ventilateurs.
+- **Extinction programmée des LED** (ventilateurs + carte mère) : par défaut de 00:00 à 07:00, avec un
+  fondu (6 s) de la couleur courante à l'extinction comme au rallumage ; l'écran reste allumé. Options :
+  `--lights-off HH:MM` (ou `none`), `--lights-on HH:MM`, `--fade SECONDES` (dans `ExecStart` du service).
 - **Notifications** : `kl-notify add|clear|count` (état dans `/run/kraken-lxc/notify.json`).
   Le hook OpenClaw `integrations/openclaw-hook` incrémente à chaque message envoyé sur Telegram
   et remet à zéro quand l'utilisateur répond (Telegram ne fournit pas d'accusé de lecture aux bots).
